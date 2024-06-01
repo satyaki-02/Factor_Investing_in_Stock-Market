@@ -1,0 +1,252 @@
+import requests
+import yfinance as yf
+from yahoo_fin import stock_info as si
+import pandas as pd
+from pandas.tseries.offsets import MonthEnd
+from datetime import datetime, timedelta
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+from collections import Counter
+
+
+
+'''
+A function that takes the market(eg: US, India etc.) as input and returns a list of symbols which were 
+delisted 1-year 1-month after start-date and which are listed prior to 1-year 1-month from today along with current symbols
+'''
+
+def collect_tickers(market, start_date):
+    if market.upper() == 'US':
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+
+    # Fetch the S&P 500 ticker symbols
+    symbols = list(pd.read_html(url)[0].Symbol)
+
+    # Remove the symbols which  were listed < 1 years back from current date
+    x = pd.read_html(url)[1]
+
+    # Updating the date column to Datetime for calculations
+    x.Date = pd.to_datetime(x.Date.Date)
+    cutoff_date = datetime.today() - timedelta(days=365)
+    stocks_remove = x[x.Date.Date > cutoff_date]
+    stocks_remove = stocks_remove['Added']['Ticker']
+
+    # We will add the stocks which were delisted after 1 year 1 month from starting date.
+    add_date = pd.to_datetime(start_date) + timedelta(days=396)
+    stocks_add = x[x.Date.Date > add_date]
+    stocks_add = stocks_add['Removed']['Ticker']
+
+    # Add the stocks_add list to symbols and remove the stocks_remove list from symbols
+    symbols.extend(stocks_add)
+    symbols = [tickers for tickers in symbols if tickers not in stocks_remove]
+
+    n = len(symbols)
+    print(f'Sucesfully downloaded {n} symbols.')
+    
+    return symbols
+
+
+'''
+A function that takes tickers for which data is to be loaded from start_date to end_date
+Input: tickers, start_date, end_date
+Output: a dictionary with symbols as keys and the dataframe as values
+'''
+
+def download_data(tickers, start_date, end_date):
+    stock_data = {}
+    for ticker in tickers:
+        try:
+            # Download historical data for each ticker
+            data = yf.download(ticker, start=start_date, end=end_date)
+            # Store the dataframe in the dictionary
+            stock_data[ticker] = data
+        except Exception as e:
+            print(f"Could not fetch data for {ticker}: {e}")
+
+    print(f'Sucesfully downloaded data for {len(stock_data.keys())} stocks!')
+    
+    return stock_data
+
+'''
+A function that sets all the missing values to 0
+'''
+def clean_data(tickers, stocks_data, date_range):
+    count = 0
+    for symbol in tickers:
+
+        try:
+            df = stocks_data[symbol]
+            # Generate a complete date range from the start to the end of the original DataFrame
+            df_reindexed = df.reindex(date_range)
+
+            df_filled = df_reindexed.ffill()
+            df_filled = df_filled.ffill().fillna(0)
+            stocks_data[symbol] = df_filled
+        except:
+            count += 1
+            tickers.remove(symbol)
+
+    if count > 0:
+        print(f'Could not update data for {count} stocks.')
+    return stocks_data
+
+
+'''
+A function that takes a list of tickers and returns a dataframe where the (i,j)th call is the return of stock i for (j+p)-th month
+Input: symbols(a list of symbols), end_date(date upto which return is to be calculated, by default- today), period
+Output: a dataframe
+'''
+def calculate_return(symbols, snp_stocks_data, end_date=datetime.today().strftime('%Y-%m-%d'), period=1):
+    # Initialize a dictionary to store the returns data
+    i = 0
+    n = len(symbols)
+    returns_data = {}
+    while i < n:
+        try:
+            stock_data = snp_stocks_data[symbols[i]][:end_date]['Adj Close']
+            
+        except:
+            i = i+1
+            stock_data = snp_stocks_data[symbols[i]][:end_date]['Adj Close']
+        print(i)
+        resampled_data = stock_data.resample('ME').last()   
+        returns = ((resampled_data.shift(-int(period)) - resampled_data) / resampled_data)* 100
+        # Store the returns data in the dictionary
+        returns_data[symbols[i]] = returns
+        i += 1
+    # Create a DataFrame from the dictionary
+    returns_df = pd.DataFrame(returns_data)
+
+    # Transpose the DataFrame so that timestamps are columns and stock names are rows
+    returns_df = returns_df.transpose()
+
+    # Sort the columns (timestamps)
+    returns_df = returns_df.sort_index(axis=1)
+
+    return returns_df
+
+
+'''
+A function to calculate the past 12-months momentum
+'''
+def calculate_monthly_returns(stock_data):    # a helper function
+    monthly_data = stock_data['Adj Close'].resample('ME').last()
+    monthly_returns = monthly_data.diff().dropna()
+    return monthly_returns
+
+def calculate_momentum(symbols, snp_stocks_data, end_date=datetime.today().strftime('%Y-%m-%d')):
+    # Initialize an empty dictionary to store the momentum data
+    momentum_data = {}
+    i = 0
+    n = len(symbols)
+    while i < n:
+        try:
+            stock_data = snp_stocks_data[symbols[i]][:end_date]
+        except:
+            i = i+1
+            stock_data = snp_stocks_data[symbols[i]][:end_date]
+        monthly_returns = calculate_monthly_returns(stock_data)
+        yearly_momentum = {}
+        for j in range(12, len(monthly_returns)):
+            period_end = monthly_returns.index[j]
+            period_start = period_end - pd.offsets.YearBegin() + pd.offsets.MonthEnd()
+            momentum = (monthly_returns[period_start:period_end].sum())/(period_end-period_start).days
+            yearly_momentum[period_end] = momentum * 100  # Return as a percentage
+        # Store the symbol's momentum data in the dictionary
+        for date, momentum in yearly_momentum.items():
+            if date not in momentum_data:
+                momentum_data[date] = {}
+            momentum_data[date][symbols[i]] = momentum
+        i = i+1
+    
+    # Create a DataFrame from the dictionary
+    momentum_df = pd.DataFrame.from_dict(momentum_data, orient='index')
+
+    # Transpose the DataFrame to flip rows as columns and columns as rows
+    momentum_df = momentum_df.transpose()
+
+    # Sort the columns (timestamps)
+    momentum_df = momentum_df.sort_index(axis=1)
+
+    
+    return momentum_df
+
+
+'''
+A function for the 12-1 momentum calculation
+'''
+def calculate_12_1_momentum(stock_data):
+    # Resample to get the last value of each month
+    monthly_data = stock_data['Adj Close'].resample('M').last()
+    
+    # Calculate the 12-1 momentum returns for each timestamp
+    momentum_returns = {}
+    for i in range(12, len(monthly_data)):
+        period_end = monthly_data.index[i]
+        momentum_return = (monthly_data[i-1] - monthly_data[i-12]) / monthly_data[i-12] * 100
+        momentum_returns[period_end] = momentum_return
+    
+    return momentum_returns
+
+
+'''
+A function to get the stocks with highest momentum(top p%)
+'''
+# Function to find the top p-percentile stock symbols(row names) for each column (timestamp)
+def top_p_percentile_stocks(df, p):
+    top_p_percentile_stocks_dict = {}
+    for timestamp in df.columns:
+        column_data = df[timestamp].sort_values(ascending=False)
+        num_stocks_to_select = int(len(column_data) * p / 100)
+        top_p_stocks = column_data.index[:num_stocks_to_select].tolist()
+        top_p_percentile_stocks_dict[timestamp] = top_p_stocks
+    return top_p_percentile_stocks_dict
+
+
+'''
+A function to get the stocks with highest momentum(top p%)
+'''
+# Function to find the bottom p-percentile stock symbols(row names) for each column (timestamp)
+def bottom_p_percentile_stocks(df, p):
+    bottom_p_percentile_stocks_dict = {}
+    for timestamp in df.columns:
+        column_data = df[timestamp].sort_values(ascending=True)
+        num_stocks_to_select = int(len(column_data) * p / 100)
+        bottom_p_stocks = column_data.index[:num_stocks_to_select].tolist()
+        bottom_p_percentile_stocks_dict[timestamp] = bottom_p_stocks
+    return bottom_p_percentile_stocks_dict
+
+
+'''
+A function to calculate the total return and exclude stock if abs(return) > threshold.
+'''
+def total_return(top_p_momentum_stocks_dict, returns_df, threshold=50):
+    total_returns_dict = {}
+    for timestamp, stocks in top_p_momentum_stocks_dict.items():
+        # Get the returns for the selected stocks at the given timestamp
+        selected_returns = returns_df.loc[stocks, timestamp]
+        # Filter out stocks with an absolute return greater than the threshold
+        filtered_returns = selected_returns[abs(selected_returns) <= threshold]
+        # Calculate the total return as the average of the filtered returns
+        if not filtered_returns.empty:
+            total_return = filtered_returns.sum() / len(filtered_returns)
+        else:
+            total_return = 0  # Handle case where all returns are excluded
+        total_returns_dict[timestamp] = total_return
+        print(timestamp, total_return)
+    return total_returns_dict
+
+
+'''
+A function to get the benchmark returns
+'''
+def get_benchmark(market, start_date, end_date=datetime.today().strftime('%Y-%m-%d'), period='ME'):
+    if market.capital == 'US':
+        ticker = '^GSPC'
+    data = yf.download(ticker, start_date, end_date)
+    returns = data['Adj Close']
+    monthly_returns = returns.resample(period).last()
+    gains = monthly_returns.pct_change().dropna()*100
+
+    return gains
