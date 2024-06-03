@@ -333,10 +333,7 @@ def seasonality_strategy(returns_df, top_p_momentum_dict, max_abs_return=50):
                 stocks = top_p_momentum_dict[timestamp]
                 stock_returns = returns_df.loc[stocks, timestamp]
                 filtered_returns = stock_returns[stock_returns.abs() <= max_abs_return]
-                if not filtered_returns.empty:
-                    total_return = filtered_returns.mean()
-                else:
-                    total_return = np.nan
+                total_return = filtered_returns.mean()
                 trade_returns[timestamp] = total_return
 
     trade_returns = pd.DataFrame.from_dict(trade_returns, orient='index', columns=['Trade Returns'])
@@ -345,12 +342,33 @@ def seasonality_strategy(returns_df, top_p_momentum_dict, max_abs_return=50):
     return trade_returns
 
 
+def seasonality_strategy_with_snp(returns_df, top_p_momentum_dict, snp_returns, max_abs_return=50):
+    trade_returns = {}
+    returns_df = returns_df.loc[:, '2001-02-28 00:00:00':'2024-05-31 00:00:00']
+    snp_returns = snp_returns.loc['2001-02-28 00:00:00':]
+    for timestamp in returns_df.columns:
+        month = timestamp.month
+        if 1 <= month <= 5 or month == 12:  # Buy the top momentum stocks from December to May
+            if timestamp in top_p_momentum_dict:
+                stocks = top_p_momentum_dict[timestamp]
+                stock_returns = returns_df.loc[stocks, timestamp]
+                filtered_returns = stock_returns[stock_returns.abs() <= max_abs_return]
+                total_return = filtered_returns.mean()
+                trade_returns[timestamp] = total_return
+        else:
+            trade_returns[timestamp] = snp_returns.loc[timestamp]
+
+    trade_returns = pd.DataFrame.from_dict(trade_returns, orient='index', columns=['Trade Returns'])
+    trade_returns.sort_index(inplace=True)
+
+    return trade_returns
+
 
 def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
     # Convert the strategy dictionary to a DataFrame
     strategy_returns_df = pd.Series(strategy_dict)
     strategy_returns_df.index = pd.to_datetime(strategy_returns_df.index)
-    strategy_returns_df = strategy_returns_df.resample('Y').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
+    strategy_returns_df = strategy_returns_df.resample('YE').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
 
     # Calculate average yearly returns for the strategy
     average_yearly_returns = strategy_returns_df.mean()
@@ -362,24 +380,15 @@ def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
     sharpe_ratio = (average_yearly_returns - risk_free_rate) / std_dev_yearly_returns
 
     # Convert the benchmark returns to a DataFrame
-    benchmark_returns = benchmark_returns.resample('Y').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
+    benchmark_returns = benchmark_returns.resample('YE').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
     
-    # Calculate average yearly returns for the benchmark
-    average_yearly_benchmark_returns = benchmark_returns.mean()
-
-    # Calculate the standard deviation of yearly benchmark returns
-    std_dev_yearly_benchmark_returns = benchmark_returns.std()
-
-    # Calculate the Sharpe ratio for the benchmark
-    benchmark_sharpe_ratio = (average_yearly_benchmark_returns - risk_free_rate) / std_dev_yearly_benchmark_returns
-
+   
     # Create a DataFrame to store the results
     results_df = pd.DataFrame({
         'Year': strategy_returns_df.index.year,
         'Strategy Returns': strategy_returns_df.values,
         'Benchmark Returns': benchmark_returns.values,
         'Strategy Sharpe Ratio': [sharpe_ratio] * len(strategy_returns_df),
-        'Benchmark Sharpe Ratio': [benchmark_sharpe_ratio] * len(strategy_returns_df)
     })
 
     results_df.set_index('Year', inplace=True)
