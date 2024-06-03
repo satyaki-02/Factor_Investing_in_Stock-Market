@@ -141,11 +141,9 @@ def calculate_momentum(symbols, stocks_data, end_date=datetime.today().strftime(
     n = len(symbols)
     while i < n:
         try:
-            print(i)
             stock_data = stocks_data[symbols[i]][:end_date]
         except:
             i = i+1
-            print(i)
             stock_data = stocks_data[symbols[i]][:end_date]
         monthly_returns = calculate_monthly_returns(stock_data)
         
@@ -154,7 +152,7 @@ def calculate_momentum(symbols, stocks_data, end_date=datetime.today().strftime(
             period_end = monthly_returns.index[j]
             period_start = period_end - pd.offsets.YearBegin() + pd.offsets.MonthEnd()
             if monthly_returns[period_start] != 0:
-                momentum = (monthly_returns[period_start:period_end].sum())/(monthly_returns[period_start])
+                momentum = (monthly_returns[period_start:period_end].sum())/(stock_data[period_start])
                 yearly_momentum[period_end] = momentum * 100  # Return as a percentage
             else:
                 yearly_momentum[period_end] = 0
@@ -241,19 +239,28 @@ def total_return(momentum_dict, returns_df, threshold=50):
         else:
             total_return = 0  # Handle case where all returns are excluded
         total_returns_dict[timestamp] = total_return
-        print(timestamp, total_return)
     return total_returns_dict
+
+
+
+
+'''
+A function to get benchmark data
+'''
+def benchmark_data(market, start_date, end_date=datetime.today().strftime('%Y-%m-%d')):
+    if market.upper() == 'US':
+        ticker = '^GSPC'
+    data = yf.download(ticker, start_date, end_date)
+    data = data['Adj Close']
+
+    return data
 
 
 '''
 A function to get the benchmark returns
 '''
-def benchmark_returns(market, start_date, end_date=datetime.today().strftime('%Y-%m-%d'), period='ME'):
-    if market.capital == 'US':
-        ticker = '^GSPC'
-    data = yf.download(ticker, start_date, end_date)
-    returns = data['Adj Close']
-    monthly_returns = returns.resample(period).last().loc['2001-01-31':'2024-04-30']
+def benchmark_returns(data,  period='ME'):    
+    monthly_returns = data.resample(period).last().loc['2001-02-28':'2024-04-30']
     gains = monthly_returns.pct_change().dropna()*100
 
     return gains
@@ -336,3 +343,45 @@ def seasonality_strategy(returns_df, top_p_momentum_dict, max_abs_return=50):
     trade_returns.sort_index(inplace=True)
 
     return trade_returns
+
+
+
+def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
+    # Convert the strategy dictionary to a DataFrame
+    strategy_returns_df = pd.Series(strategy_dict)
+    strategy_returns_df.index = pd.to_datetime(strategy_returns_df.index)
+    strategy_returns_df = strategy_returns_df.resample('Y').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
+
+    # Calculate average yearly returns for the strategy
+    average_yearly_returns = strategy_returns_df.mean()
+
+    # Calculate the standard deviation of yearly returns
+    std_dev_yearly_returns = strategy_returns_df.std()
+
+    # Calculate the Sharpe ratio
+    sharpe_ratio = (average_yearly_returns - risk_free_rate) / std_dev_yearly_returns
+
+    # Convert the benchmark returns to a DataFrame
+    benchmark_returns = benchmark_returns.resample('Y').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
+    
+    # Calculate average yearly returns for the benchmark
+    average_yearly_benchmark_returns = benchmark_returns.mean()
+
+    # Calculate the standard deviation of yearly benchmark returns
+    std_dev_yearly_benchmark_returns = benchmark_returns.std()
+
+    # Calculate the Sharpe ratio for the benchmark
+    benchmark_sharpe_ratio = (average_yearly_benchmark_returns - risk_free_rate) / std_dev_yearly_benchmark_returns
+
+    # Create a DataFrame to store the results
+    results_df = pd.DataFrame({
+        'Year': strategy_returns_df.index.year,
+        'Strategy Returns': strategy_returns_df.values,
+        'Benchmark Returns': benchmark_returns.values,
+        'Strategy Sharpe Ratio': [sharpe_ratio] * len(strategy_returns_df),
+        'Benchmark Sharpe Ratio': [benchmark_sharpe_ratio] * len(strategy_returns_df)
+    })
+
+    results_df.set_index('Year', inplace=True)
+    
+    return results_df
