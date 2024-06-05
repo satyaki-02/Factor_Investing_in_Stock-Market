@@ -129,51 +129,21 @@ def calculate_return(symbols, stocks_data, end_date=datetime.today().strftime('%
 '''
 A function to calculate the past 12-months momentum
 '''
-def calculate_monthly_returns(stock_data):    # a helper function
+def calculate_momentum(stock_data):
+    # Resample to get the last value of each month
     monthly_data = stock_data['Adj Close'].resample('ME').last()
-    monthly_returns = monthly_data.diff().dropna()
-    return monthly_returns
-
-def calculate_momentum(symbols, stocks_data, end_date=datetime.today().strftime('%Y-%m-%d')):
-    # Initialize an empty dictionary to store the momentum data
-    momentum_data = {}
-    i = 0
-    n = len(symbols)
-    while i < n:
-        try:
-            stock_data = stocks_data[symbols[i]][:end_date]
-        except:
-            i = i+1
-            stock_data = stocks_data[symbols[i]][:end_date]
-        monthly_returns = calculate_monthly_returns(stock_data)
-        
-        yearly_momentum = {}
-        for j in range(12, len(monthly_returns)):
-            period_end = monthly_returns.index[j]
-            period_start = period_end - pd.offsets.YearBegin() + pd.offsets.MonthEnd()
-            if monthly_returns[period_start] != 0:
-                momentum = (monthly_returns[period_start:period_end].sum())/(stock_data[period_start])
-                yearly_momentum[period_end] = momentum * 100  # Return as a percentage
-            else:
-                yearly_momentum[period_end] = 0
-        # Store the symbol's momentum data in the dictionary
-        for date, momentum in yearly_momentum.items():
-            if date not in momentum_data:
-                momentum_data[date] = {}
-            momentum_data[date][symbols[i]] = momentum
-        i = i+1
     
-    # Create a DataFrame from the dictionary
-    momentum_df = pd.DataFrame.from_dict(momentum_data, orient='index')
-
-    # Transpose the DataFrame to flip rows as columns and columns as rows
-    momentum_df = momentum_df.transpose()
-
-    # Sort the columns (timestamps)
-    momentum_df = momentum_df.sort_index(axis=1)
-
+    # Calculate the 12-1 momentum returns for each timestamp
+    momentum_returns = {}
+    for i in range(12, len(monthly_data)):
+        period_end = monthly_data.index[i]
+        if monthly_data[i-12] != 0:        
+            momentum_return = ((monthly_data[i] - monthly_data[i-12]) / monthly_data[i-12]) * 100
+        else:
+            momentum_return = 0
+        momentum_returns[period_end] = momentum_return
     
-    return momentum_df
+    return momentum_returns
 
 '''
 A function for the 12-1 momentum calculation
@@ -210,7 +180,7 @@ def top_p_percentile_stocks(df, p):
 
 
 '''
-A function to get the stocks with highest momentum(top p%)
+A function to get the stocks with lowest momentum(bottom p%)
 '''
 # Function to find the bottom p-percentile stock symbols(row names) for each column (timestamp)
 def bottom_p_percentile_stocks(df, p):
@@ -224,24 +194,61 @@ def bottom_p_percentile_stocks(df, p):
 
 
 '''
-A function to calculate the total return and exclude stock if abs(return) > threshold.
+A function to calculate the total return of stocks in a list and exclude stock if abs(return) > threshold.
 '''
-def total_return(momentum_dict, returns_df, threshold=50):
+def total_return(stocks_data, momentum_dict, returns_df, threshold=50):
     total_returns_dict = {}
     for timestamp, stocks in momentum_dict.items():
-        # Get the returns for the selected stocks at the given timestamp
-        selected_returns = returns_df.loc[stocks, timestamp]
-        # Filter out stocks with an absolute return greater than the threshold
-        filtered_returns = selected_returns[abs(selected_returns) <= threshold]
-        # Calculate the total return as the average of the filtered returns
-        if not filtered_returns.empty:
-            total_return = filtered_returns.sum() / len(filtered_returns)
+        total_return = 0
+        total_invested = 0
+        for stock in stocks:
+            stock_change = returns_df.loc[stock, timestamp]
+            if abs(stock_change) < threshold:
+                total_return += (stock_change*stocks_data[stock]['Adj Close'][timestamp - pd.DateOffset(months=1)])/100
+                total_invested += stocks_data[stock]['Adj Close'][timestamp - pd.DateOffset(months=1)]
+            else:
+                total_return = 0
+
+        if total_return != 0:
+            total_returns_dict[timestamp] = (total_return/total_invested)*100
         else:
-            total_return = 0  # Handle case where all returns are excluded
-        total_returns_dict[timestamp] = total_return
+            total_returns_dict[timestamp] = 0
+
     return total_returns_dict
 
 
+'''
+A function to calculate the total return of stocks in a list and exclude stock if abs(return) > threshold.
+'''
+def long_sort_return(stocks_data, momentum_dict, sort_dict, returns_df, threshold=50):
+    total_returns_dict = {}
+    for timestamp, stocks in momentum_dict.items():
+        sort = sort_dict[timestamp]
+        
+        total_return = 0
+        total_invested = 0
+        for stock in stocks:
+            stock_change = returns_df.loc[stock, timestamp]
+            if abs(stock_change) < threshold:
+                total_return += (stock_change*stocks_data[stock]['Adj Close'][timestamp - pd.DateOffset(months=1)])/100
+                total_invested += stocks_data[stock]['Adj Close'][timestamp - pd.DateOffset(months=1)]
+            else:
+                total_return = 0
+        
+        for stock in sort:
+            stock_change = returns_df.loc[stock, timestamp]
+            if abs(stock_change) < threshold:
+                total_return -= (stock_change*stocks_data[stock]['Adj Close'][timestamp - pd.DateOffset(months=1)])/100
+                total_invested += stocks_data[stock]['Adj Close'][timestamp - pd.DateOffset(months=1)]
+            else:
+                total_return = 0
+
+        if total_return != 0:
+            total_returns_dict[timestamp] = (total_return/total_invested)*100
+        else:
+            total_returns_dict[timestamp] = 0
+
+    return total_returns_dict
 
 
 '''
@@ -279,7 +286,7 @@ def benchmark_returns(data,  period='ME'):
 """
 def calculate_m_month_moving_average(stock_data, m):
     # Resample to get the last value of each month
-    monthly_data = stock_data['Adj Close'].resample('M').last()
+    monthly_data = stock_data['Adj Close'].resample('ME').last()
     
     # Calculate the m-month moving average
     moving_average = monthly_data.rolling(window=m).mean()
@@ -342,26 +349,26 @@ def seasonality_strategy(returns_df, top_p_momentum_dict, max_abs_return=50):
     return trade_returns
 
 
-def seasonality_strategy_with_snp(returns_df, top_p_momentum_dict, snp_returns, max_abs_return=50):
-    trade_returns = {}
-    returns_df = returns_df.loc[:, '2001-02-28 00:00:00':'2024-05-31 00:00:00']
-    snp_returns = snp_returns.loc['2001-02-28 00:00:00':]
-    for timestamp in returns_df.columns:
-        month = timestamp.month
-        if 1 <= month <= 5 or month == 12:  # Buy the top momentum stocks from December to May
-            if timestamp in top_p_momentum_dict:
-                stocks = top_p_momentum_dict[timestamp]
-                stock_returns = returns_df.loc[stocks, timestamp]
-                filtered_returns = stock_returns[stock_returns.abs() <= max_abs_return]
-                total_return = filtered_returns.mean()
-                trade_returns[timestamp] = total_return
-        else:
-            trade_returns[timestamp] = snp_returns.loc[timestamp]
+# def seasonality_strategy(returns_df, top_p_momentum_dict, snp_returns, max_abs_return=50):
+#     trade_returns = {}
+#     returns_df = returns_df.loc[:, '2001-02-28 00:00:00':'2024-05-31 00:00:00']
+#     snp_returns = snp_returns.loc['2001-02-28 00:00:00':]
+#     for timestamp in returns_df.columns:
+#         month = timestamp.month
+#         if 1 <= month <= 5 or month == 12:  # Buy the top momentum stocks from December to May
+#             if timestamp in top_p_momentum_dict:
+#                 stocks = top_p_momentum_dict[timestamp]
+#                 stock_returns = returns_df.loc[stocks, timestamp]
+#                 filtered_returns = stock_returns[stock_returns.abs() <= max_abs_return]
+#                 total_return = filtered_returns.mean()
+#                 trade_returns[timestamp] = total_return
+#         else:
+#             trade_returns[timestamp] = snp_returns.loc[timestamp]
 
-    trade_returns = pd.DataFrame.from_dict(trade_returns, orient='index', columns=['Trade Returns'])
-    trade_returns.sort_index(inplace=True)
+#     trade_returns = pd.DataFrame.from_dict(trade_returns, orient='index', columns=['Trade Returns'])
+#     trade_returns.sort_index(inplace=True)
 
-    return trade_returns
+#     return trade_returns
 
 
 def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
@@ -369,7 +376,7 @@ def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
     strategy_returns_df = pd.Series(strategy_dict)
     strategy_returns_df.index = pd.to_datetime(strategy_returns_df.index)
     strategy_returns_df = strategy_returns_df.resample('YE').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
-
+    print(strategy_returns_df)
     # Calculate average yearly returns for the strategy
     average_yearly_returns = strategy_returns_df.mean()
 
