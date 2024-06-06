@@ -16,7 +16,7 @@ A function that takes the market(eg: US, India etc.) as input and returns a list
 delisted 1-year 1-month after start-date and which are listed prior to 1-year 1-month from today along with current symbols
 '''
 
-def collect_tickers(market, start_date):
+def collect_tickers(market, start_date, end_date):
     if market.upper() == 'US':
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
 
@@ -28,7 +28,7 @@ def collect_tickers(market, start_date):
 
     # Updating the date column to Datetime for calculations
     x.Date = pd.to_datetime(x.Date.Date)
-    cutoff_date = datetime.today() - timedelta(days=365)
+    cutoff_date = end_date - timedelta(days=365)
     stocks_remove = x[x.Date.Date > cutoff_date]
     stocks_remove = stocks_remove['Added']['Ticker']
 
