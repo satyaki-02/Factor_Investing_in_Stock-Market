@@ -28,7 +28,7 @@ def collect_tickers(market, start_date, end_date):
 
     # Updating the date column to Datetime for calculations
     x.Date = pd.to_datetime(x.Date.Date)
-    cutoff_date = end_date - timedelta(days=365)
+    cutoff_date =  pd.to_datetime(end_date) - timedelta(days=365)
     stocks_remove = x[x.Date.Date > cutoff_date]
     stocks_remove = stocks_remove['Added']['Ticker']
 
@@ -60,7 +60,7 @@ def download_data(tickers, start_date, end_date):
             # Download historical data for each ticker
             data = yf.download(ticker, start=start_date, end=end_date)
             # Store the dataframe in the dictionary
-            stock_data[ticker] = data
+            stock_data[ticker] = data['Adj Close']
         except Exception as e:
             print(f"Could not fetch data for {ticker}: {e}")
 
@@ -376,7 +376,7 @@ def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
     strategy_returns_df = pd.Series(strategy_dict)
     strategy_returns_df.index = pd.to_datetime(strategy_returns_df.index)
     strategy_returns_df = strategy_returns_df.resample('YE').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
-    print(strategy_returns_df)
+    
     # Calculate average yearly returns for the strategy
     average_yearly_returns = strategy_returns_df.mean()
 
