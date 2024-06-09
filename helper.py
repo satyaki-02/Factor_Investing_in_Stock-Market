@@ -19,7 +19,7 @@ delisted 1-year 1-month after start-date and which are listed prior to 1-year 1-
 def collect_tickers(market, start_date, end_date):
     if market.upper() == 'US':
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-
+    
     # Fetch the S&P 500 ticker symbols
     symbols = list(pd.read_html(url)[0].Symbol)
 
@@ -127,18 +127,18 @@ def calculate_return(symbols, stocks_data, end_date=datetime.today().strftime('%
 
 
 '''
-A function to calculate the past 12-months momentum
+A function to calculate the past m-months momentum
 '''
-def calculate_momentum(stock_data):
+def calculate_m_momentum(stock_data, m):
     # Resample to get the last value of each month
     monthly_data = stock_data['Adj Close'].resample('ME').last()
     
-    # Calculate the 12-1 momentum returns for each timestamp
+    # Calculate the m-month momentum returns for each timestamp
     momentum_returns = {}
-    for i in range(12, len(monthly_data)):
+    for i in range(m, len(monthly_data)):
         period_end = monthly_data.index[i]
-        if monthly_data[i-12] != 0:        
-            momentum_return = ((monthly_data[i] - monthly_data[i-12]) / monthly_data[i-12]) * 100
+        if monthly_data[i-m] != 0:        
+            momentum_return = ((monthly_data[i] - monthly_data[i-m]) / monthly_data[i-m]) * 100
         else:
             momentum_return = 0
         momentum_returns[period_end] = momentum_return
@@ -166,15 +166,20 @@ def calculate_12_1_momentum(stock_data):
 
 
 '''
-A function to get the stocks with highest momentum(top p%)
+A function to get the stocks with highest momentum(top p percentile)
 '''
-# Function to find the top p-percentile stock symbols(row names) for each column (timestamp)
+# Function to find the top p-percentile stock symbols(row names) for each timestamp (column)
 def top_p_percentile_stocks(df, p):
     top_p_percentile_stocks_dict = {}
     for timestamp in df.columns:
         column_data = df[timestamp].sort_values(ascending=False)
-        num_stocks_to_select = int(len(column_data) * p / 100)
-        top_p_stocks = column_data.index[:num_stocks_to_select].tolist()
+        
+        # Calculate the p-th percentile value
+        threshold_value = column_data.quantile(p / 100.0)
+        
+        # Select stocks below the p-th percentile value
+        top_p_stocks = column_data[column_data <= threshold_value].index.tolist()
+        
         top_p_percentile_stocks_dict[timestamp] = top_p_stocks
     return top_p_percentile_stocks_dict
 
@@ -187,8 +192,13 @@ def bottom_p_percentile_stocks(df, p):
     bottom_p_percentile_stocks_dict = {}
     for timestamp in df.columns:
         column_data = df[timestamp].sort_values(ascending=True)
-        num_stocks_to_select = int(len(column_data) * p / 100)
-        bottom_p_stocks = column_data.index[:num_stocks_to_select].tolist()
+        
+        # Calculate the p-th percentile value
+        threshold_value = column_data.quantile(p / 100.0)
+        
+        # Select stocks below the p-th percentile value
+        bottom_p_stocks = column_data[column_data <= threshold_value].index.tolist()
+        
         bottom_p_percentile_stocks_dict[timestamp] = bottom_p_stocks
     return bottom_p_percentile_stocks_dict
 
@@ -295,12 +305,11 @@ def calculate_m_month_moving_average(stock_data, m):
 
 
 # Define the function to calculate the total return with m-month moving average filtering
-def total_return_with_moving_average(momentum_dict, returns_df, m, stock_data_dict):
-    total_returns_dict = {}
+def stocks_moving_average(momentum_dict, m, stock_data_dict):
+    stock_dict = {}
     
     for timestamp, stocks in momentum_dict.items():
         valid_stocks = []
-        total_return = 0
 
         for stock in stocks:
             stock_data = stock_data_dict[stock]
@@ -314,20 +323,13 @@ def total_return_with_moving_average(momentum_dict, returns_df, m, stock_data_di
                 
                 # Check if the current price is greater than the m-month moving average
                 if current_price > moving_avg:
-                    # Add the stock's return to the total return
-                    stock_return = returns_df.loc[stock, timestamp]
-                    total_return += stock_return
                     valid_stocks.append(stock)
         
         # Update the momentum_dict to only include valid stocks
-        momentum_dict[timestamp] = valid_stocks
-        # Calculate the average return if there are valid stocks
-        if valid_stocks:
-            total_return /= len(valid_stocks)
+        stock_dict[timestamp] = valid_stocks
         
-        total_returns_dict[timestamp] = total_return
     
-    return total_returns_dict
+    return stock_dict
 
 
 def seasonality_strategy(returns_df, top_p_momentum_dict, max_abs_return=50):
@@ -371,33 +373,137 @@ def seasonality_strategy(returns_df, top_p_momentum_dict, max_abs_return=50):
 #     return trade_returns
 
 
+
+def calculate_monthly_percentage_change(stock_data):
+    # Resample to get end-of-month data
+    monthly_data = stock_data['Adj Close'].resample('ME').last()
+    return monthly_data.pct_change() * 100
+
+def classify_stocks(snp_stocks_data, p):
+    long_dict = {}
+    short_dict = {}
+    
+    for symbol, data in snp_stocks_data.items():
+        # Calculate monthly percentage change
+        monthly_pct_change = calculate_monthly_percentage_change(data)
+        
+        # Iterate through each month from the previous year
+        for current_date in monthly_pct_change.index:
+            if current_date.year >= 2001:  # Skip the first year since we need the previous year data
+                last_year_date = current_date - pd.DateOffset(years=1)
+                
+                if last_year_date in monthly_pct_change.index:
+                    pct_change = monthly_pct_change[last_year_date]
+                    
+                    # Classify into long or short based on percentage change
+                    if pct_change >= p:
+                        if current_date not in long_dict:
+                            long_dict[current_date] = []
+                        long_dict[current_date].append(symbol)
+                    elif pct_change <= -p:
+                        if current_date not in short_dict:
+                            short_dict[current_date] = []
+                        short_dict[current_date].append(symbol)
+    
+    return long_dict, short_dict
+
+
+def calculate_sharpe_ratio(monthly_returns, risk_free_rate=0):
+    # Calculate the average monthly return
+    average_monthly_return = monthly_returns.mean()
+    
+    # Calculate the standard deviation of the monthly returns
+    monthly_std_dev = monthly_returns.std()
+    
+    # Calculate the annualized return
+    annualized_return = (1 + average_monthly_return / 100) ** (12) - 1
+    
+    # Calculate the annualized standard deviation
+    annualized_std_dev = monthly_std_dev * np.sqrt(len(monthly_returns))
+    
+    # Calculate the Sharpe ratio
+    sharpe_ratio = (average_monthly_return - risk_free_rate) / annualized_std_dev
+    
+    return sharpe_ratio, annualized_return * 100  # Return annualized return as a percentage
+
+
 def calculate_yearly_stats(strategy_dict, benchmark_returns, risk_free_rate=0):
     # Convert the strategy dictionary to a DataFrame
     strategy_returns_df = pd.Series(strategy_dict)
     strategy_returns_df.index = pd.to_datetime(strategy_returns_df.index)
-    strategy_returns_df = strategy_returns_df.resample('YE').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
+    strategy_returns_df = strategy_returns_df.resample('ME').last()  # Ensure monthly frequency
     
-    # Calculate average yearly returns for the strategy
-    average_yearly_returns = strategy_returns_df.mean()
-
-    # Calculate the standard deviation of yearly returns
-    std_dev_yearly_returns = strategy_returns_df.std()
-
-    # Calculate the Sharpe ratio
-    sharpe_ratio = (average_yearly_returns - risk_free_rate) / std_dev_yearly_returns
-
     # Convert the benchmark returns to a DataFrame
-    benchmark_returns = benchmark_returns.resample('YE').apply(lambda x: ((1 + x / 100).prod() - 1) * 100)
+    benchmark_returns.index = pd.to_datetime(benchmark_returns.index)
+    benchmark_returns = benchmark_returns.resample('ME').last()  # Ensure monthly frequency
     
-   
+    # Initialize lists to store yearly results
+    years = []
+    strategy_returns = []
+    benchmark_returns_list = []
+    strategy_sharpe_ratios = []
+    benchmark_sharpe_ratios = []
+
+    # Calculate stats for each year
+    for year in strategy_returns_df.index.year.unique():
+        # Filter the returns for the current year
+        strategy_yearly_returns = strategy_returns_df[strategy_returns_df.index.year == year]
+        benchmark_yearly_returns = benchmark_returns[benchmark_returns.index.year == year]
+
+        # Ensure we have 12 months of data
+        if len(strategy_yearly_returns) == 12 and len(benchmark_yearly_returns) == 12:
+        
+            # Calculate Sharpe ratio
+            strategy_sharpe_ratio, strategy_annual_return = calculate_sharpe_ratio(strategy_yearly_returns, risk_free_rate)
+            benchmark_sharpe_ratio, benchmark_annual_return = calculate_sharpe_ratio(benchmark_yearly_returns, risk_free_rate)
+
+            # Append results
+            years.append(year)
+            strategy_returns.append(strategy_annual_return)
+            benchmark_returns_list.append(benchmark_annual_return)
+            strategy_sharpe_ratios.append(strategy_sharpe_ratio)
+            benchmark_sharpe_ratios.append(benchmark_sharpe_ratio)
+
     # Create a DataFrame to store the results
     results_df = pd.DataFrame({
-        'Year': strategy_returns_df.index.year,
-        'Strategy Returns': strategy_returns_df.values,
-        'Benchmark Returns': benchmark_returns.values,
-        'Strategy Sharpe Ratio': [sharpe_ratio] * len(strategy_returns_df),
+        'Year': years,
+        'Strategy Returns': strategy_returns,
+        'Benchmark Returns': benchmark_returns_list,
+        'Strategy Sharpe Ratio': strategy_sharpe_ratios,
+        'Benchmark Sharpe Ratio': benchmark_sharpe_ratios
     })
 
     results_df.set_index('Year', inplace=True)
+        
+    # Plot the Sharpe ratios
+    fig = go.Figure()
+        
+        # Add strategy Sharpe ratios bar trace
+    fig.add_trace(
+        go.Bar(
+            x=results_df.index,
+            y=results_df['Strategy Sharpe Ratio'],
+            name='Strategy Sharpe Ratio'
+        )
+    )
+        
+        # Add benchmark Sharpe ratios bar trace
+    fig.add_trace(
+        go.Bar(
+            x=results_df.index,
+            y=results_df['Benchmark Sharpe Ratio'],
+            name='Benchmark Sharpe Ratio'
+        )
+    )
+        
+        # Update the layout
+    fig.update_layout(
+        title='Yearly Strategy vs Benchmark Sharpe Ratios',
+        xaxis_title='Year',
+        yaxis_title='Sharpe Ratio',
+        barmode='group'
+    )
+        
+    fig.show()   
     
-    return results_df
+    return results_df.round(2)

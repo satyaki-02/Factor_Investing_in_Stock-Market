@@ -1,6 +1,7 @@
 from helper import *
 
-def momentum_long():
+def momentum_long(momentum, p ):
+    top_p_momentum_stocks_dict = top_p_percentile_stocks(momentum, p)
     pass
 
 def momentum_long_sort():
