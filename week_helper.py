@@ -70,12 +70,12 @@ def clean_data(stocks_data, full_date_range):
     
     return stocks_data_full_ffill
 
-
 '''
 A function that takes a list of tickers and returns a dataframe where the (i,j)th call is the return of stock i for (j+p)-th month
 Input: symbols(a list of symbols), end_date(date upto which return is to be calculated, by default- today), period
 Output: a dataframe
 '''
+
 def calculate_returns(stocks_data, rebalance='W', periods=1):
     # Ensure the index is a datetime index
     
@@ -86,6 +86,7 @@ def calculate_returns(stocks_data, rebalance='W', periods=1):
     weekly_pct_change = weekly_data.pct_change(periods=1)*100
     
     return weekly_pct_change.shift(-1).T
+
 
 
 '''
@@ -421,9 +422,9 @@ def value_strategy_ls(stocks_data, percentile_buy, percentile_sell):
                     current_price = stocks_data.loc[date, stock]
                     
                     # Check if the current price is below the buy percentile value or above the sell percentile value
-                    if current_price > percentile_value_buy:
+                    if current_price < percentile_value_buy:
                         valid_stocks_buy.append(stock)
-                    if current_price < percentile_value_sell:
+                    if current_price > percentile_value_sell:
                         valid_stocks_sell.append(stock)
             
             # Update the result dictionaries
