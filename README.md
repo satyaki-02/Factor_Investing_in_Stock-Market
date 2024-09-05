@@ -39,3 +39,6 @@ Below is a brief description of the main files used in the project:
 - `factors.py`: Computes the factors and also plots the cumulative returns.
 - Files starting with `snp_` or `nse_` refer to code for S&P 500 and Nifty 500 respectively.
 - Files ending with `_weekly` or `_monthly` indicate code for weekly and monthly portfolio rebalancing.
+
+
+**Here is the link to the [project report](https://drive.google.com/file/d/1n-wBl3NRtKINd5zGxDsroJEwYgMnY2du/view?usp=sharing) and [demo video](https://drive.google.com/file/d/1i0yxThqOo2Gf-Y7GKYo6XAM0qw9BA8QU/view?usp=sharing)**
